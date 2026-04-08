@@ -1,0 +1,39 @@
+set $namespace="%SYS"
+Do ##class(Security.Users).UnExpireUserPasswords("*")
+Do ##class(Config.NLS.Locales).Install("jpuw")
+
+// Embedded Python用にCallInサービスを有効化（現在の設定を取得）
+set st=##class(Security.Services).Get("%Service_CallIn",.pro)
+set pro("Enabled")=1
+// 修正登録
+set st=##class(Security.Services).Modify("%Service_CallIn",.pro)
+
+// FHIRリポジトリの作成
+set $namespace="HSLIB"
+Set appKey = "/csp/healthshare/r4fhirnamespace/fhir/r4"
+Set strategyClass = "HS.FHIRServer.Storage.JsonAdvSQL.InteractionsStrategy"
+Set metadataPackages = $lb("hl7.fhir.r4.core@4.0.1")
+Do ##class(HS.Util.Installer.Foundation).Install("R4FHIRNAMESPACE")
+Set $namespace = "R4FHIRNAMESPACE"
+Do ##class(HS.FHIRServer.Installer).InstallNamespace()
+Do ##class(HS.FHIRServer.Installer).InstallInstance(appKey, strategyClass, metadataPackages)
+
+// JSONTemplate for FHIR インポート
+do $System.OBJ.Import("/opt/src/JSONTemplate-FHIR-v.1.1.xml","ck")
+// 継承関係修復のため2度目のインポート
+do $System.OBJ.Import("/opt/src/JSONTemplate-FHIR-v.1.1.xml","ck")
+
+// FHIRCustomインポート
+do $System.OBJ.LoadDir("/opt/src/FHIRCustom","ckb",,1)
+
+// プロダクション：RecordMap用インポート
+do $System.OBJ.LoadDir("/opt/src/CSVtoFHIR/RM","ckb",,1)
+// プロダクション：Transform.cls
+do $System.OBJ.Import("/opt/src/CSVtoFHIR/Transform.cls","ck")
+// プロダクション：Utils.cls
+do $System.OBJ.Import("/opt/src/CSVtoFHIR/Utils.cls","ck")
+// CSVtoFHIR一式
+do $System.OBJ.LoadDir("/opt/src/CSVtoFHIR","ckb",,1)
+
+//Observation:category用初期データ作成
+write ##class(FHIRCustom.CodeableConcept.ObservationCategory).GenerateData()

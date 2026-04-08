@@ -1,0 +1,30 @@
+
+services:  
+  csvtofhir:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports: ["9872:1972","5678:5678"]
+    volumes:
+      - ./src:/src
+      - ./data:/data
+      - ./iris.key:/tmp/iris.key
+    command: ["--key","/tmp/iris.key"]
+    environment: 
+      - TZ=JST-9
+
+  wgcsvtofhir:
+    image: containers.intersystems.com/intersystems/webgateway:2026.1
+    init: true
+    ports:
+      - 9981:80
+      #- 443:443
+    environment:
+    - ISC_CSP_CONF_FILE=/webgateway-shared/CSP.conf
+    - ISC_CSP_INI_FILE=/webgateway-shared/CSP.ini
+    volumes:
+    - ./webgateway:/webgateway-shared
+    # SSL有効化する場合は command 行のコメントを外します。
+    #   SSL有効化する場合は、webgateway ディレクトリ内にSSL用の証明書と秘密鍵を配置してください。
+    #   例）./webgateway/server.crt, ./webgateway/server.key
+    #command: ["--ssl"]

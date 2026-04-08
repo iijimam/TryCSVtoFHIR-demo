@@ -1,0 +1,546 @@
+＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝
+CSVデータ から FHIR R4 リソースリポジトリへの登録
+	IRIS for Health 2023.2以降
+	Ste2-演習サポートファイル
+＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝
+
+----
+P7　プロダクションの名称
+----
+パッケージ名	：	CSVtoFHIR
+プロダクション名：	Production
+
+
+----
+P10　GET要求のテスト（HS.FHIRServer.Interop.Operation）
+----
+Request SessionApplication	：/csp/healthshare/r4fhirnamespace/fhir/r4
+Request RequestMethod		：GET
+Request RequestPath		：/Patient
+Request BaseURL			：/csp/healthshare/r4fhirnamespace/fhir/r4
+Request RequestFormatCode	：JSON
+Request ResponseFormatCode	：JSON
+
+
+P11　トレースに表示されるJSONを見易くするQueryString
+
+Request RequestQueryString	：_pretty=true
+
+
+----
+P12　QuickStreamのオープン
+----
+set stream=##class(HS.SDA3.QuickStream).%OpenId("T4")
+
+※引数の文字列はテストで確認したIDを使用してください
+
+
+//ストリームの中身を表示する（Read()の結果を出力）
+write stream.Read()
+
+
+----
+P13　QuickStreamからJSONダイナミックオブジェクト
+----
+set j={}.%FromJSON(stream)
+//氏名カナを取得
+write j.entry.%Get(0).resource.name.%Get(1).text
+
+
+
+----
+P16　CSV(Patient)のレコード・マップ名
+----
+CSVtoFHIR.RM.Patient
+
+
+
+---
+P23 ターミナルでテスト
+---
+set o=##class(CSVtoFHIR.RM.Patient.Record).%New()
+set o.PatientId="12345"
+set o.LastName="山田",o.FirstName="太郎"
+set o.LastNameKana="ヤマダ",o.FirstNameKana="タロウ"
+set o.DOB=$ZDATEH(19960112,8)
+set o.Gender="M"
+set st=o.%JSONExportToStream(.stream)  //インスタンスのJSON化
+set json={}.%FromJSON(stream)  //ストリーム→ダイナミックオブジェクトへ変換
+set p=##class(FHIRTemplate.Patient).%New(json)  //Patientリソース作成
+do p.OutputToDevice()  //PatientリソースのJSON出力
+
+
+----
+P25～30　CSVtoFHIR.DTL.Patient
+----
+パッケージ名		：CSVtoFHIR.DTL
+クラス名		：Patient
+ソースクラス		：CSVtoFHIR.RM.Patient.Record
+ターゲットクラス	：FHIRTemplate.Patient
+
+
+DOBプロパティの値	：$ZDATEH(source.DOB,8)
+Genderプロパティの値	：$select(source.Gender="M":1,1:2)
+
+
+
+//以下ターミナルでのテスト例
+
+set o=##class(CSVtoFHIR.RM.Patient.Record).%New()
+set o.PatientId="12345"
+set o.LastName="山田",o.FirstName="太郎"
+set o.LastNameKana="ヤマダ",o.FirstNameKana="タロウ"
+set o.DOB=19960112
+set o.Gender="M"
+set st=##class(CSVtoFHIR.DTL.Patient).Transform(o,.patient)
+do patient.OutputToDevice()
+
+//検証
+do patient.OutputToDynamicObject(.j)
+set status=##class(CSVtoFHIR.Utils).Validate(j)
+write status //1が返れば検証成功
+
+
+
+----
+P31～36　CSVtoFHIR.TransformクラスのPatient()メソッド
+----
+
+ClassMethod Patient(source As CSVtoFHIR.RM.Patient.Record, ByRef patient As FHIRTemplate.Patient) As %Status
+{
+    #dim ex As %Exception.AbstractException
+    set status=$$$OK
+    try {
+        //レコードマップのインスタンスをJSONストリームに変換
+        $$$ThrowOnError(source.%JSONExportToStream(.jstream))
+        //JSONストリームからダイナミックオブジェクトに変換
+        set in={}.%FromJSON(jstream.Read())
+        set in.DOB=$ZDATEH(in.DOB,8)
+
+        //FHIRTemplate.Patientのインスタンス生成時にデータ割り当て
+        set patient=##class(FHIRTemplate.Patient).%New(in)
+        //Patient.addressのAddressタイプにデータ割り当て
+        set address=##class(FHIRTemplate.DataType.Address).%New(in)
+        set patient.Address=address
+
+		//GenderをFHIR R4 Patientリソースに合わせて変更
+        set patient.Gender=$select(in.Gender="M":1,1:2)
+
+    }
+    catch ex {
+        set status=ex.AsStatus()
+    }
+    return status
+}
+
+
+
+
+
+----
+P38～43　患者基本情報のCSVからPatientリソースの変換＋保存を実行するプロセス
+----
+パッケージ名	：CSVtoFHIR.BP
+クラス名	：PatientProcess
+
+
+＜プロパティ＞
+
+/// 情報送付先コンポーネント名指定
+Property TargetConfigName As %String(MAXLEN = 255);
+
+/// FHIRエンドポイントのパスを指定します（必須）
+Property FHIREndpoint As %String(MAXLEN = 512);
+
+
+///SETTINGSパラメータ
+Parameter SETTINGS = "FHIREndpoint:CSVFHIR変換用設定:selector?context={HS.FHIRServer.Util.ContextSearch/FHIRServerEndpoints},TargetConfigName:CSVFHIR変換用設定:selector?context={Ens.ContextSearch/ProductionItems?targets=1&productionName=@productionId}";
+
+
+///メソッド
+Method OnRequest(pRequest As CSVtoFHIR.RM.Patient.Record, Output pResponse As HS.FHIRServer.Interop.Response) As %Status
+{
+    #dim ex As %Exception.AbstractException
+    #dim patient As FHIRTemplate.Patient
+    set status=$$$OK
+    Try {
+        //$$$ThrowOnError(##class(CSVtoFHIR.Transform).Patient(pRequest,.patient))
+	$$$ThrowOnError(##class(CSVtoFHIR.DTL.Patient).Transform(pRequest,.patient))
+
+        $$$ThrowOnError(patient.OutputToDynamicObject(.patjson))
+
+        //検証実行
+        $$$ThrowOnError(##class(CSVtoFHIR.Utils).Validate(patjson))
+        
+        //QuickStreamに作成したPatientリソースを保存
+        set QS=##class(HS.SDA3.QuickStream).%New()
+        set quickStreamId=QS.%Id()
+        //作成したPatientリソースをストリームに出力
+        $$$ThrowOnError(patient.OutputToStream(QS))
+	//先頭ポジションに戻ります（必須）
+        do QS.Rewind()
+
+        set fhirRequest=##class(HS.FHIRServer.Interop.Request).%New()
+        set fhirRequest.Request.RequestMethod="POST"
+        set fhirRequest.Request.RequestPath="Patient"
+        set fhirRequest.Request.RequestFormatCode="JSON"
+        set fhirRequest.Request.ResponseFormatCode="JSON"
+        set fhirRequest.Request.SessionApplication=..FHIREndpoint
+        set fhirRequest.QuickStreamId=quickStreamId
+
+        $$$ThrowOnError(..SendRequestSync(..TargetConfigName,fhirRequest,.pResponse))
+
+        if pResponse.Response.Status'="201" {
+			//ステータスエラーを作成してcatchへ移動
+            set outcome=##class(HS.SDA3.QuickStream).%OpenId(pResponse.QuickStreamId)
+            throw ##class(%Exception.General).%New("FHIR OperationOutcome",,,outcome.Read())
+        }
+    }
+    Catch ex {
+        Set status=ex.AsStatus()
+    }
+    return status
+}
+
+
+----
+P44　CSVtoFHIR.BP.PatientProcess　プロダクションの設定
+----
+FHIREndpoint	：/csp/healthshare/r4fhirnamespace/fhir/r4
+ターゲット構成名	：HS.FHIRServer.Interop.Operation
+
+
+----
+P45　Patient用CSVのレコードマップ用ファイルサービスの設定
+----
+サービスクラスには   EnsLib.RecordMap.Serivice.FileService　を選択
+
+ファイル・パス	：C:\temp\CSVtoFHIR\in
+RecordMap	：CSVtoFHIR.RM.Patient
+ターゲット構成名	：CSVtoFHIR.BP.PatientProcess
+
+
+----
+P47　PatientのGET要求
+----
+URL	：http://localhost/irishealth/csp/healthshare/r4fhirnamespace/fhir/r4/Patient
+	《PWS》
+	http://localhost:52773/csp/healthshare/r4fhirnamespace/fhir/r4/Patient
+ヘッダ（Accept）	：application/json+fhir
+
+
+----
+P51　CSV（LabTest）のレコードマップ名
+----
+CSVtoFHIR.RM.LabTest
+
+
+----
+P52　CSV（LabTest）のバッチクラス名
+----
+CSVtoFHIR.RM.LabTestBatch
+
+
+----
+P54～58　身長・体重の測定結果を登録するObservationリソース用テンプレートクラスを用意
+----
+/// Observation.category
+Class FHIRCustom.CodeableConcept.ObservationCategory Extends (%Persistent, FHIRTemplate.Util.CodeTable, FHIRTemplate.DataType.CodeableConceptBase)
+{
+
+Parameter CodeSystem = "http://jpfhir.jp/fhir/Common/ValueSet/bodyMeasurement-code";
+
+Index IDKeyIdx On code [ IdKey, Unique ];
+
+/// コードは以下PDFを参考にしています。
+/// https://std.jpfhir.jp/stddoc/eDischargeSummaryFHIR_v1x.pdf
+XData InsertCode [ MimeType = application/json ]
+{
+{ "data":[
+    "social-history;社会生活歴",
+    "vital-signs;バイタルサイン",
+    "imaging;画像検査",
+    "laboratory;検査室検査",
+    "survey;調査・評価",
+    "exam;身体検査・観察",
+    "therapy;非介入治療による観察結果",
+    "activity;身体活動記録"
+  ] 
+}
+}
+}
+
+
+<データ作成>
+write ##class(FHIRCustom.CodeableConcept.ObservationCategory).GenerateData()
+
+<確認：SELECT>
+SELECT * FROM FHIRCustom_CodeableConcept.ObservationCategory
+
+<確認：JSON出力>
+set o=##class(FHIRCustom.CodeableConcept.ObservationCategory).GetByCode("exam")
+do o.OutputToDevice()
+
+
+----
+P59～64　FHIRTemplate.Observationを継承するテンプレートクラス作成
+	FHIRCustom.ObservationBodyMeasurement
+----
+
+Class FHIRCustom.ObservationBodyMeasurement Extends FHIRTemplate.Observation
+{
+
+Property Category As list Of FHIRCustom.CodeableConcept.ObservationCategory;
+
+Property Code As FHIRCustom.CodeableConcept.BodyMeasurementCode;
+
+/// JSON出力する際のテンプレート
+/// https://jpfhir.jp/jpcoreV1/ObservationCommon を参考に作成
+/// JSONの値の文字列に#(..プロパティ名)#または#(..#パラメータ名)#を指定することで
+/// プロパティの値をJSON形式で出力できます。
+/// プロパティの型がJSONTemplate.Baseを継承したクラスの場合、
+/// そのクラスのテンプレートからJSON出力します。
+XData Template [ MimeType = application/json ]
+{
+{
+  "resourceType": "#(..#ResourceType)#",
+  "category": [ "#(..Category)#" ],
+  "code": "#(..Code)#",
+  "effectiveDateTime": "#(..EffectiveDateTime)#",
+  "subject": { "reference":"#(..PatientResourceId)#" },
+  "status": "final",
+  "valueQuantity": "#(..ValueQuantity(FHIRTemplate.DataType.Quantity))#"
+}
+}
+
+Property PatientResourceId As %String;
+
+}
+
+
+-----
+P65～66　Observation()の作成　（CSVtoFHIR.Transformクラス）
+-----
+ClassMethod Observation(source As CSVtoFHIR.RM.LabTest.Record, ByRef observation As FHIRCustom.ObservationBodyMeasurement, ByRef aux As %String) As %Status
+{
+    #dim ex As %Exception.AbstractException
+    set status=$$$OK
+    Try {
+        //レコードマップのインスタンスをJSONストリームに変換
+        $$$ThrowOnError(source.%JSONExportToStream(.jstream))
+        //JSONストリームからダイナミックオブジェクトに変換
+        set in={}.%FromJSON(jstream.Read()) 
+
+        //Obseration用テンプレートクラスのインスタンス生成
+        set observation=##class(FHIRCustom.ObservationBodyMeasurement).%New()
+   
+	// Categoryの設定
+   	set category=##class(FHIRCustom.CodeableConcept.ObservationCategory).GetByCode("exam")
+   	do observation.Category.Insert(category)
+
+        // Codeの作成
+        set code=##class(FHIRCustom.CodeableConcept.BodyMeasurementCode).%New(in)
+        set observation.Code=code
+        
+        // EffectiveDateTimeの設定
+        set observation.EffectiveDateTime=$ZDATETIMEH(in.EffectiveDateTime,3)
+        
+        // valueQuantityの設定
+        set valueQuantity=##class(FHIRTemplate.DataType.Quantity).%New(in)
+        set observation.ValueQuantity=valueQuantity
+
+        //reference（Observation.subjectにPatientのリソースIDをセット）
+		if $get(aux("PatientMap",source.PatientId))'="" {
+			set observation.PatientResourceId=aux("PatientMap",source.PatientId)
+        }
+		else {
+			set observation.PatientResourceId="Patient/"_source.PatientId
+		}
+    }
+    Catch ex {
+        Set status=ex.AsStatus()
+    }
+    return status
+}
+
+
+
+-----
+P67　FHIRCustom.BundleTransactionクラスの作成　（type=transactionのBundleリソース用テンプレートクラスの作成）
+-----
+
+
+Class FHIRCustom.BundleTransaction Extends FHIRTemplate.Bundle
+{
+
+/// type=transaction
+XData Template [ MimeType = application/json ]
+{
+{
+  "resourceType": "#(..#ResourceType)#",
+  "type": "transaction",
+  "entry": [
+  	"#(..resource(FHIRTemplate.Bundle.entry))#"
+  	]
+}
+}
+
+}
+
+
+----
+P68～　CSV（LabTest）からObservationリソースの変換と登録を実行するプロセスの作成
+----
+パッケージ名	：CSVtoFHIR.BP
+プロセス名	：LabTestBatchProcess
+
+＜プロパティ＞
+
+/// 情報送付先コンポーネント名指定
+Property TargetConfigName As %String(MAXLEN = 255);
+
+/// FHIRエンドポイントのパスを指定します（必須）
+Property FHIREndpoint As %String(MAXLEN = 512);
+
+/// Patientリソースを検索するときのIdentifier.systemの値
+Property IdentifierSystem As %String(MAXLEN = 512);
+
+///SETTINGSパラメータ
+Parameter SETTINGS = "FHIREndpoint:CSVFHIR変換用設定:selector?context={HS.FHIRServer.Util.ContextSearch/FHIRServerEndpoints},TargetConfigName:CSVFHIR変換用設定:selector?context={Ens.ContextSearch/ProductionItems?targets=1&productionName=@productionId},IdentifierSystem:CSVFHIR変換用設定";
+
+
+///メソッド
+Method OnRequest(pRequest As CSVtoFHIR.RM.LabTestBatch, Output pResponse As HS.FHIRServer.Interop.Response) As %Status
+{
+  #dim ex As %Exception.AbstractException
+  set status=$$$OK
+  try {
+    set recordcnt=pRequest.Records.Count()
+    set pidstring=""
+		for i=1:1:recordcnt {
+			set pid=pRequest.Records.GetAt(i).PatientId
+			//新規のPIDか、すでに他の行で処理したPIDかチェックする
+			if $Get(pidTemp("PatientMap",pid))'="Patient" {	
+				set pidTemp("PatientMap",pid)="Patient"	
+				set pidstring=pidstring_pid_","
+			}
+		}
+    //患者名検索
+    set searchRequest=##class(HS.FHIRServer.Interop.Request).%New()
+    set searchRequest.Request.RequestMethod="GET"
+    set searchRequest.Request.RequestPath="Patient"
+    set searchRequest.Request.QueryString="identifier="_..IdentifierSystem_"|"_pidstring
+    //set searchRequest.Request.QueryString="identifier="_..IdentifierSystem_"|"_pidstring_"&_pretty=true"
+    set searchRequest.Request.RequestFormatCode="JSON"
+    set searchRequest.Request.ResponseFormatCode="JSON"
+    set searchRequest.Request.SessionApplication=..FHIREndpoint
+    set searchRequest.Request.BaseURL=..FHIREndpoint
+    #dim searchResponse As HS.FHIRServer.Interop.Response
+    $$$ThrowOnError(..SendRequestSync(..TargetConfigName,searchRequest,.searchResponse))
+
+    //検索エラーだった場合Catchへ移動
+    if searchResponse.Response.Status'="200" {
+    //ステータスエラーを作成してcatchへ移動
+      set outcome=##class(HS.SDA3.QuickStream).%OpenId(searchResponse.QuickStreamId)
+      throw ##class(%Exception.General).%New("FHIR OperationOutcome",,,outcome.Read())
+    }
+        
+    //検索結果からPatientリソースを確認
+    set searchResultQS=##class(HS.SDA3.QuickStream).%OpenId(searchResponse.QuickStreamId)
+    //QuickStreamからJSONに変換
+    set patJSON={}.%FromJSON(searchResultQS)
+
+    if patJSON.total > 0 {
+      //1件目の患者情報の内部IDを参照用に使う
+      set iter=patJSON.entry.%GetIterator()
+      while(iter.%GetNext(.key,.patient)) {
+        set pid=patient.resource.identifier.%Get(0).value
+        set pidTemp("PatientMap",pid)="Patient/"_patient.resource.id		
+      }
+    }
+		set bundle=##class(FHIRCustom.BundleTransaction).%New()
+			
+		//Observationリソースに変換しBundleに格納する
+		for i=1:1:recordcnt {
+			//CSV入力のLabTest情報をFHIRのObservationリソースに変数するデータ変換を呼び出す
+			$$$ThrowOnError(##class(CSVtoFHIR.Transform).Observation(pRequest.Records.GetAt(i),.observation,.pidTemp))
+			
+			// ObservationのHTTPメソッドをURLを指定
+			set observation.requestMethod="POST"
+			set observation.requestUrl="Observation"
+			// BundleにObservationを登録
+      do bundle.resource.Insert(observation)
+      kill observation
+		}
+	
+		$$$ThrowOnError(bundle.OutputToDynamicObject(.bundleJSON))
+
+    $$$TRACE(bundleJSON.%ToJSON())
+    //検証実行
+    $$$ThrowOnError(##class(CSVtoFHIR.Utils).Validate(bundleJSON))
+
+    //BundleをQuickStreamに登録
+    set bundleQS=##class(HS.SDA3.QuickStream).%New()
+    do bundleJSON.%ToJSON(bundleQS)
+    //先頭ポジションに戻ります（必須）
+    do bundleQS.Rewind()
+
+    set fhirRequest=##class(HS.FHIRServer.Interop.Request).%New()
+    set fhirRequest.Request.RequestMethod="POST"
+    set fhirRequest.Request.RequestPath="/"
+    set fhirRequest.Request.RequestFormatCode="JSON"
+    set fhirRequest.Request.ResponseFormatCode="JSON"
+    set fhirRequest.Request.SessionApplication=..FHIREndpoint
+    set fhirRequest.Request.QueryString="_pretty=true"
+    set fhirRequest.QuickStreamId=bundleQS.%Id()
+    $$$ThrowOnError(..SendRequestSync(..TargetConfigName,fhirRequest,.pResponse))
+
+    if pResponse.Response.Status'="200" {
+    //ステータスエラーを作成してcatchへ移動
+      set outcome=##class(HS.SDA3.QuickStream).%OpenId(pResponse.QuickStreamId)
+      throw ##class(%Exception.General).%New("FHIR OperationOutcome",,,outcome.Read())
+    }
+  }
+  catch ex {
+    set status=ex.AsStatus()
+  }
+  return status
+}
+
+
+---
+P78　ビジネス・プロセス：CSVtoFHIR.BP.LabTestBatchProcessの設定
+---
+
+FHIREndpoint：	/csp/healthshare/r4fhirnamespace/fhir/r4
+ターゲット構成名：	HS.FHIRServer.Interop.Operation
+IdentifierSystem：	urn:oid:1.2.392.100495.20.3.51.11311234567
+
+
+---
+P79　バッチレコードマップを使うビジネス・サービス：CSVLabTestの設定
+---
+
+ファイル・パス：	C:\temp\CSVtoFHIR\LabTestIn\
+RecordMap：	CSVtoFHIR.RM.LabTest
+ターゲット構成名：	CSVtoFHIR.BP.LabTestBatchProcess
+
+バッチハンドリング：	Whole Batchを選択
+BatchClass：	 CSVtoFHIR.RM.LabTestBatch
+
+
+
+---
+P83　RESTクライアントでGET要求実行
+---
+※PatientリソースのリソースIDは環境に合わせて適宜ご変更ください
+http://localhost/irishealth/csp/healthshare/r4fhirnamespace/fhir/r4/Patient/4/$everything
+
+《PWS》
+http://localhost:52773/csp/healthshare/r4fhirnamespace/fhir/r4/Patient/4/$everything
+
+
+ヘッダ：	Accept
+ヘッダの値：	application/json+fhir
+
+

@@ -1,0 +1,17 @@
+### CSVtoFHIRで登録したリソースの確認
+### 山田太郎がPatient/1で登録がある想定での記載
+### Patient全件取得
+GET http://localhost:9981/csp/healthshare/r4fhirnamespace/fhir/r4/Patient
+Authorization: Basic SuperUser:SYS
+Accept: application/fhir+json
+
+
+### Patient/2に関連するリソース取得
+GET http://localhost:9981/csp/healthshare/r4fhirnamespace/fhir/r4/Patient/2/$everything
+Authorization: Basic SuperUser:SYS
+Accept: application/fhir+json
+
+### Patient/7に関連するリソース取得
+GET http://localhost:9981/csp/healthshare/r4fhirnamespace/fhir/r4/Patient/7/$everything
+Authorization: Basic SuperUser:SYS
+Accept: application/fhir+json

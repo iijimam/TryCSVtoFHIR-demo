@@ -1,0 +1,17 @@
+{
+    "objectscript.conn": {
+        "active": false,
+        "server": "test",
+        "ns": "R4FHIRNAMESPACE"
+    },
+    "intersystems.servers": {
+        "test":{
+            "webServer": {
+                "host": "127.0.0.1",
+                "port": 9981,
+                "scheme": "http"
+            },
+            "username": "SuperUser"
+        }
+    }
+}
