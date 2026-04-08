@@ -37,3 +37,6 @@ do $System.OBJ.LoadDir("/opt/src/CSVtoFHIR","ckb",,1)
 
 //Observation:category用初期データ作成
 write ##class(FHIRCustom.CodeableConcept.ObservationCategory).GenerateData()
+
+//プロダクション起動
+do ##class(Ens.Director).StartProduction("CSVtoFHIR.Production")
