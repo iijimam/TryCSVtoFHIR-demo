@@ -12,5 +12,6 @@ COPY src .
 
 # IRISを開始し、IRISにログインし、iris.scriptに記載のコマンドを実行しています
 RUN iris start IRIS \
+    && pip install -r requirements.txt --break-system-packages \
     && iris session IRIS < iris.script \
     && iris stop IRIS quietly 
