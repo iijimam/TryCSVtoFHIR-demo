@@ -23,6 +23,8 @@ def create_patient(request,endpoint):
         iris.check_status(status)
 
         # QuickStream に作成した Patient リソースを保存
+        # memo: 
+        # QuickStream は、IRIS 内部でメッセージデータを一時的に保持・受け渡しするためのストリームオブジェクトです。
         qs=iris.HS.SDA3.QuickStream._New()
         qsid=qs._Id()
         status=patient.OutputToStream(qs)
